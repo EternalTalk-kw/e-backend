@@ -4,7 +4,7 @@ import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDateTime;
 
-@Entity @Table(name="users")
+@Entity @Table(name="users")//프젝 시작
 @Getter @Setter @Builder
 @NoArgsConstructor @AllArgsConstructor
 public class User {
