@@ -4,7 +4,7 @@ import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDateTime;
 
-@Entity @Table(name="users")//프젝 시작
+@Entity @Table(name="users")//회원 기능 확인
 @Getter @Setter @Builder
 @NoArgsConstructor @AllArgsConstructor
 public class User {
