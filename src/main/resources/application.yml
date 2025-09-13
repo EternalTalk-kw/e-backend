@@ -1,11 +1,13 @@
 spring:
   application:
     name: EternalTalk
+
   datasource:
     url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:eternaltalk}?useSSL=false&serverTimezone=UTC&characterEncoding=utf8
     username: ${DB_USERNAME}
     password: ${DB_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
+
   jpa:
     hibernate:
       ddl-auto: update
@@ -13,6 +15,7 @@ spring:
       hibernate:
         dialect: org.hibernate.dialect.MySQL8Dialect
     open-in-view: false
+
   security:
     oauth2:
       client:
@@ -25,8 +28,22 @@ spring:
           google:
             user-info-uri: https://www.googleapis.com/oauth2/v3/userinfo
 
+# (선택) 파일 업로드 용량 조정이 필요하면 주석 해제
+#  servlet:
+#    multipart:
+#      max-file-size: 20MB
+#      max-request-size: 20MB
+
 security:
   jwt:
     secret: ${JWT_SECRET}
-    access-expiration-ms: ${JWT_ACCESS_EXP_MS:900000}   # 15?
-    refresh-expiration-ms: ${JWT_REFRESH_EXP_MS:1209600000} # 14?
+    access-expiration-ms: ${JWT_ACCESS_EXP_MS:900000}        # 15분(밀리초)
+    refresh-expiration-ms: ${JWT_REFRESH_EXP_MS:1209600000}  # 14일(밀리초)
+
+# ====== 음성 합성/스토리지 환경변수 ======
+ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY}
+
+S3_REGION: ${S3_REGION}
+S3_BUCKET: ${S3_BUCKET}
+S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+S3_SECRET_KEY: ${S3_SECRET_KEY}
