@@ -42,8 +42,8 @@ security:
 
 # ====== 음성 합성/스토리지 환경변수 ======
 ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY}
-
 DID_API_KEY: ${DID_API_KEY}
+OPENAI_API_KEY: ${OPENAI_API_KEY}
 
 S3_REGION: ${S3_REGION}
 S3_BUCKET: ${S3_BUCKET}
