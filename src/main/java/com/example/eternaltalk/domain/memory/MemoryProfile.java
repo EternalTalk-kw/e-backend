@@ -21,6 +21,12 @@ public class MemoryProfile {
     @Column(name="photo_url")
     private String photoUrl;
 
+    @Column(name = "display_name")
+    private String displayName;
+
+    @Column(name = "personality_prompt", columnDefinition = "TEXT")
+    private String personalityPrompt;
+
     private LocalDateTime updatedAt;
 
     @PrePersist @PreUpdate
