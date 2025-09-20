@@ -4,7 +4,7 @@ import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDateTime;
 
-@Entity @Table(name = "memory_profile",
+@Entity @Table(name = "memory_profile",// 비디오 url 수정
         uniqueConstraints = @UniqueConstraint(name="uk_memory_profile_user", columnNames = "user_id"))
 @Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
 public class MemoryProfile {
