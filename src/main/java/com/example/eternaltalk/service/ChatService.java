@@ -104,6 +104,20 @@ public class ChatService {
         return new ChatDtos.QuotaResponse(remaining, plan.dailyLimit);
     }
 
+    public Optional<ChatDtos.ProfileResponse> getProfile(String email) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new IllegalArgumentException("사용자를 찾을 수 없습니다: " + email));
+
+        return memoryProfileRepository.findByUserId(user.getId())
+                .map(mp -> new ChatDtos.ProfileResponse(
+                        mp.getId(),
+                        mp.getDisplayName(),
+                        mp.getPersonalityPrompt(),
+                        mp.getPhotoUrl() // 엔티티에 없다면 null 리턴
+                ));
+    }
+
+
     // ---- Helpers ----
 
     /** FREE=100, SILVER=500, GOLD=700 */
