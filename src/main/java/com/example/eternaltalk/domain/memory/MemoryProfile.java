@@ -18,7 +18,7 @@ public class MemoryProfile {
     @Column(name="voice_clone_id")
     private String voiceCloneId;
 
-    @Column(name="photo_url")
+    @Column(name = "photo_url", columnDefinition = "TEXT")  // 또는 length = 2048
     private String photoUrl;
 
     @Column(name = "display_name")

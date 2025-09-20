@@ -18,7 +18,12 @@ public class VideoDtos {
     // POST /api/video/upload-photo
     public static class UploadPhotoResponse {
         public String photoUrl;
-        public UploadPhotoResponse(String photoUrl){ this.photoUrl = photoUrl; }
+        public String url;
+
+        public UploadPhotoResponse(String url) {
+            this.url = url;
+            this.photoUrl = url;
+        }
     }
 
     // GET /api/video/status/{jobId}
