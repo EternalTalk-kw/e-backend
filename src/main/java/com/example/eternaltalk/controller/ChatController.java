@@ -5,6 +5,7 @@ import com.example.eternaltalk.dto.ChatDtos;
 import com.example.eternaltalk.security.SecurityUtils;
 import com.example.eternaltalk.service.ChatService;
 import jakarta.validation.Valid;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -13,6 +14,15 @@ public class ChatController {
 
     private final ChatService service;
     public ChatController(ChatService service){ this.service = service; }
+
+    // ✅ GET /api/memory/profile 추가 (프론트 hasProfile/getProfile에서 호출)
+    @GetMapping("/memory/profile")
+    public ResponseEntity<ChatDtos.ProfileResponse> getProfile() {
+        String email = SecurityUtils.currentUserEmailOrThrow();
+        return service.getProfile(email)
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
 
     // PUT /api/memory/profile
     @PutMapping("/memory/profile")

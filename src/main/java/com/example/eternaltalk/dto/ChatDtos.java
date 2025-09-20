@@ -35,4 +35,11 @@ public class ChatDtos {
         public int planLimit;
         public QuotaResponse(int remaining, int planLimit){ this.remainingCharsToday = remaining; this.planLimit = planLimit; }
     }
+
+    public record ProfileResponse(
+            Long profileId,
+            String displayName,
+            String personalityPrompt,
+            String photoUrl // 없으면 null 허용
+    ) {}
 }
