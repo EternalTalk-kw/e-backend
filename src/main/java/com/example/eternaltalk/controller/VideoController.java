@@ -15,21 +15,28 @@ public class VideoController {
     private final VideoService service;
     public VideoController(VideoService service){ this.service = service; }
 
-    // POST /api/video/generate (입력 {text} → 서버가 TTS 후 D-ID 요청)
+    // (기존) 텍스트로 생성: 서버 내부에서 TTS -> 오디오 -> 영상
     @PostMapping("/generate")
     public VideoDtos.GenerateResponse generate(@Valid @RequestBody VideoDtos.GenerateRequest req){
         String email = SecurityUtils.currentUserEmailOrThrow();
-        return service.generate(email, req.text);
+        return service.generateFromText(email, req.text);
     }
 
-    // POST /api/video/upload-photo (정면 사진 업로드 → URL 반환 및 memory_profile.photo_url 갱신)
+    // === [추가] 이미 만들어진 오디오(audioUrl)로 바로 생성 ===
+    @PostMapping("/generate-from-audio")
+    public VideoDtos.GenerateResponse generateFromAudio(@Valid @RequestBody VideoDtos.GenerateFromAudioRequest req){
+        String email = SecurityUtils.currentUserEmailOrThrow();
+        return service.generateFromAudio(email, req.audioUrl);
+    }
+
+    // (기존) 정면 사진 업로드
     @PostMapping(value="/upload-photo", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public VideoDtos.UploadPhotoResponse uploadPhoto(@RequestPart("file") MultipartFile file){
         String email = SecurityUtils.currentUserEmailOrThrow();
         return service.uploadPhoto(email, file);
     }
 
-    // GET /api/video/status/{jobId}
+    // (기존) 상태 폴링
     @GetMapping("/status/{jobId}")
     public VideoDtos.StatusResponse status(@PathVariable String jobId){
         String email = SecurityUtils.currentUserEmailOrThrow();

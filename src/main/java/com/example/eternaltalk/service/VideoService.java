@@ -1,219 +1,199 @@
 package com.example.eternaltalk.service;
 
-import com.example.eternaltalk.client.DidClient;
+import com.example.eternaltalk.client.HeygenClient;
 import com.example.eternaltalk.client.ElevenLabsClient;
 import com.example.eternaltalk.domain.User;
 import com.example.eternaltalk.domain.memory.MemoryProfile;
-import com.example.eternaltalk.domain.video.VideoLastGenerated;
 import com.example.eternaltalk.domain.video.VideoRequest;
 import com.example.eternaltalk.dto.VideoDtos;
 import com.example.eternaltalk.repository.MemoryProfileRepository;
 import com.example.eternaltalk.repository.UserRepository;
-import com.example.eternaltalk.repository.VideoLastGeneratedRepository;
 import com.example.eternaltalk.repository.VideoRequestRepository;
 import com.example.eternaltalk.storage.S3Uploader;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
-import org.springframework.web.server.ResponseStatusException;
 
-import java.lang.reflect.Field;
 import java.text.SimpleDateFormat;
-import java.time.Duration;
-import java.time.LocalDateTime;
-import java.util.*;
+import java.util.Date;
+import java.util.Optional;
 
 @Service
 public class VideoService {
 
+    private final HeygenClient heygen;
+    private final ElevenLabsClient eleven; // 텍스트→mp3 생성(voice* 로직 재사용)
     private final UserRepository userRepository;
     private final MemoryProfileRepository memoryProfileRepository;
     private final VideoRequestRepository videoRequestRepository;
-    private final VideoLastGeneratedRepository videoLastGeneratedRepository;
-    private final ElevenLabsClient eleven;
-    private final DidClient did;
     private final S3Uploader s3;
 
-    public VideoService(UserRepository userRepository,
-                        MemoryProfileRepository memoryProfileRepository,
-                        VideoRequestRepository videoRequestRepository,
-                        VideoLastGeneratedRepository videoLastGeneratedRepository,
-                        ElevenLabsClient eleven,
-                        DidClient did,
-                        S3Uploader s3) {
+    public VideoService(
+            HeygenClient heygen,
+            ElevenLabsClient eleven,
+            UserRepository userRepository,
+            MemoryProfileRepository memoryProfileRepository,
+            VideoRequestRepository videoRequestRepository,
+            S3Uploader s3
+    ) {
+        this.heygen = heygen;
+        this.eleven = eleven;
         this.userRepository = userRepository;
         this.memoryProfileRepository = memoryProfileRepository;
         this.videoRequestRepository = videoRequestRepository;
-        this.videoLastGeneratedRepository = videoLastGeneratedRepository;
-        this.eleven = eleven;
-        this.did = did;
         this.s3 = s3;
     }
 
-    // === 1) Generate ===
-    public VideoDtos.GenerateResponse generate(String email, String text) {
+    /** 프론트가 텍스트만 줄 때: 서버 내부에서 TTS 후 generateFromAudio 재사용 */
+    @Transactional
+    public VideoDtos.GenerateResponse generateFromText(String email, String text) {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new IllegalArgumentException("사용자를 찾을 수 없습니다."));
 
-        MemoryProfile mp = memoryProfileRepository.findByUserId(user.getId())
-                .orElseThrow(() -> new IllegalArgumentException("메모리 프로필이 없습니다. 먼저 프로필을 생성해 주세요."));
-
-        if (isBlank(mp.getVoiceCloneId()) || isBlank(mp.getPhotoUrl())) {
-            throw new IllegalArgumentException("voice_id 또는 photo_url이 없습니다. 먼저 샘플/사진을 등록해 주세요.");
+        // (선택) 글자수/이모지 제한 등 기존 규칙 검증
+        if (!isValidShortKorean(text)) {
+            throw new IllegalArgumentException("텍스트는 한글 15자(공백/이모지 제외) 이내여야 합니다.");
         }
 
-        // 요금제 규칙 검사 (FREE=3일, SILVER=2일, GOLD=1일)
-        PlanType plan = resolvePlan(user); // 기본 FREE
-        int needDays = plan.intervalDays;
-        int remain = daysRemaining(user.getId(), needDays);
-        if (remain > 0) {
-            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
-                    "영상 생성까지 " + remain + "일 남았습니다. (요금제: " + plan.name() + ")");
-        }
+        // 1) TTS → mp3 바이트 (ElevenLabs 사용)
+        byte[] mp3 = synthesizeToMp3(text);
 
-        // 텍스트 검증: 한글 15자(공백/이모지 제외)
-        if (!VoiceService.isValidKoreanUnderLimit(text, 15)) {
-            throw new IllegalArgumentException("text는 한글 기준 공백/이모지 제외 15자 이내여야 합니다.");
-        }
-
-        // 1) TTS → mp3 S3 업로드
-        byte[] mp3 = eleven.tts(mp.getVoiceCloneId(), text);
-        String audioKey = "voices/" + user.getId() + "/" + nowTs() + ".mp3";
+        // 2) mp3를 S3에 올리고 presigned URL 획득(현재 12h 유효)
+        String audioKey = "voice/" + user.getId() + "/" + nowTs() + ".mp3";
         String audioUrl = s3.uploadBytes(audioKey, mp3, "audio/mpeg");
 
-        // 2) D-ID talks 호출
-        DidClient.CreateResponse created = did.createTalk(mp.getPhotoUrl(), audioUrl);
-
-        // 3) DB 기록 (비동기 잡)
-        String jobId = created.id();
-        String mapped = mapStatus(created.status()); // created -> PENDING 등
-        videoRequestRepository.save(VideoRequest.builder()
-                .userId(user.getId())
-                .jobId(jobId)
-                .status(mapped)
-                .photoUrl(mp.getPhotoUrl())
-                .audioUrl(audioUrl)
-                .build());
-
-        return new VideoDtos.GenerateResponse(jobId, mapped);
+        // 3) 동일 로직 재사용
+        return generateFromAudio(email, audioUrl);
     }
 
-    // === 2) Upload photo ===
-    public VideoDtos.UploadPhotoResponse uploadPhoto(String email, MultipartFile image) {
+    /** 이미 mp3 URL이 있을 때: 사진 URL + 오디오 URL로 HeyGen에 생성 요청 */
+    @Transactional
+    public VideoDtos.GenerateResponse generateFromAudio(String email, String audioUrl) {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new IllegalArgumentException("사용자를 찾을 수 없습니다."));
-        if (image == null || image.isEmpty()) {
-            throw new IllegalArgumentException("정면 사진 파일이 필요합니다.");
+
+        MemoryProfile profile = memoryProfileRepository.findByUserId(user.getId())
+                .orElseThrow(() -> new IllegalStateException("프로필이 없습니다. 먼저 /api/video/upload-photo 로 사진을 업로드하세요."));
+
+        if (profile.getPhotoUrl() == null || profile.getPhotoUrl().isBlank()) {
+            throw new IllegalStateException("사진 URL이 비어 있습니다. /api/video/upload-photo 먼저 호출하세요.");
         }
-        String contentType = Optional.ofNullable(image.getContentType()).orElse("image/jpeg");
-        if (!contentType.startsWith("image/")) {
-            throw new IllegalArgumentException("이미지 파일만 업로드할 수 있습니다.");
-        }
 
-        byte[] bytes;
-        try { bytes = image.getBytes(); }
-        catch (Exception e){ throw new IllegalArgumentException("이미지 읽기에 실패했습니다."); }
+        // 1) HeyGen Avatar IV 생성(사진 1장 + 오디오 URL)
+        String videoId = heygen.createAvatarIVVideo(
+                profile.getPhotoUrl(),
+                audioUrl,
+                1280, 720, // 16:9 (무료/플랜 제한 고려)
+                "EternalTalk " + nowTs()
+        );
 
-        String ext = guessExt(contentType, image.getOriginalFilename());
-        String key = "photos/" + user.getId() + "/" + nowTs() + "." + ext;
-        String photoUrl = s3.uploadBytes(key, bytes, contentType);
+        // 2) 우리 DB에 job 기록
+        VideoRequest vr = VideoRequest.builder()
+                .userId(user.getId())
+                .jobId(videoId)
+                .status("PROCESSING")
+                .photoUrl(profile.getPhotoUrl())
+                .audioUrl(audioUrl)
+                .build();
+        videoRequestRepository.save(vr);
 
-        // memory_profile.photo_url 갱신
-        MemoryProfile mp = memoryProfileRepository.findByUserId(user.getId())
-                .orElseGet(() -> com.example.eternaltalk.domain.memory.MemoryProfile.builder()
-                        .userId(user.getId()).build());
-        mp.setPhotoUrl(photoUrl);
-        memoryProfileRepository.save(mp);
-
-        return new VideoDtos.UploadPhotoResponse(photoUrl);
+        return new VideoDtos.GenerateResponse(videoId, "PROCESSING");
     }
 
-    // === 3) Status ===
+    /** 상태 조회: HeyGen status → DB 반영 → 응답 반환 */
+    @Transactional
     public VideoDtos.StatusResponse status(String email, String jobId) {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new IllegalArgumentException("사용자를 찾을 수 없습니다."));
 
-        VideoRequest req = videoRequestRepository.findByJobIdAndUserId(jobId, user.getId())
-                .orElseThrow(() -> new IllegalArgumentException("해당 jobId를 찾을 수 없습니다."));
+        VideoRequest vr = videoRequestRepository.findByJobIdAndUserId(jobId, user.getId())
+                .orElseThrow(() -> new IllegalArgumentException("해당 jobId가 없습니다."));
 
-        var st = did.getTalkStatus(jobId);
-        String mapped = mapStatus(st.status());
-        String resultUrl = ("DONE".equals(mapped)) ? st.result_url() : null;
+        HeygenClient.Status s = heygen.getVideoStatus(jobId);
+        String st = s.status() != null ? s.status().toUpperCase() : "PENDING";
 
-        // DB 업데이트
-        boolean changed = !Objects.equals(req.getStatus(), mapped) || !Objects.equals(req.getResultUrl(), resultUrl);
-        if (changed) {
-            req.setStatus(mapped);
-            req.setResultUrl(resultUrl);
-            videoRequestRepository.save(req);
-        }
-
-        // DONE 최초 달성 시 last_generated 갱신
-        if ("DONE".equals(mapped)) {
-            videoLastGeneratedRepository.findByUserId(user.getId())
-                    .ifPresentOrElse(
-                            v -> { v.setLastGeneratedAt(LocalDateTime.now()); videoLastGeneratedRepository.save(v); },
-                            () -> videoLastGeneratedRepository.save(
-                                    VideoLastGenerated.builder().userId(user.getId()).lastGeneratedAt(LocalDateTime.now()).build()
-                            )
-                    );
-        }
-
-        return new VideoDtos.StatusResponse(mapped, resultUrl);
-    }
-
-    // ===== Helpers =====
-    private String mapStatus(String did){
-        if (did == null) return "PENDING";
-        return switch (did.toLowerCase()) {
-            case "created" -> "PENDING";
-            case "started", "processing", "in_progress" -> "PROCESSING";
-            case "done", "completed" -> "DONE";
-            case "error", "failed" -> "ERROR";
-            default -> "PENDING";
-        };
-    }
-
-    private enum PlanType {
-        FREE(3), SILVER(2), GOLD(1);
-        final int intervalDays; PlanType(int d){ this.intervalDays = d; }
-        static PlanType safe(String s){
-            try { return PlanType.valueOf(s.toUpperCase()); } catch (Exception e){ return FREE; }
+        switch (st) {
+            case "COMPLETED" -> {
+                vr.setStatus("DONE");
+                vr.setResultUrl(s.videoUrl());
+                videoRequestRepository.save(vr);
+                return new VideoDtos.StatusResponse("DONE", s.videoUrl());
+            }
+            case "FAILED" -> {
+                vr.setStatus("ERROR");
+                videoRequestRepository.save(vr);
+                return new VideoDtos.StatusResponse("ERROR", null);
+            }
+            default -> {
+                if (!"PROCESSING".equals(vr.getStatus())) {
+                    vr.setStatus("PROCESSING");
+                    videoRequestRepository.save(vr);
+                }
+                return new VideoDtos.StatusResponse("PROCESSING", null);
+            }
         }
     }
 
-    /** 유저 객체에 plan/membership/tier 필드가 있다면 반영, 없으면 FREE */
-    private PlanType resolvePlan(User user){
-        for (String fieldName : new String[]{"plan", "membership", "tier"}) {
-            try {
-                Field f = user.getClass().getDeclaredField(fieldName);
-                f.setAccessible(true);
-                Object v = f.get(user);
-                if (v != null) return PlanType.safe(v.toString());
-            } catch (Exception ignore) {}
+    /** 사진 업로드: S3 업로드 후 MemoryProfile.photoUrl 저장/갱신 */
+    @Transactional
+    public VideoDtos.UploadPhotoResponse uploadPhoto(String email, MultipartFile file) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new IllegalArgumentException("사용자를 찾을 수 없습니다."));
+
+        try {
+            if (file == null || file.isEmpty()) {
+                throw new IllegalArgumentException("업로드할 파일이 없습니다.");
+            }
+
+            String contentType = file.getContentType();
+            if (contentType == null || !contentType.startsWith("image/")) {
+                throw new IllegalArgumentException("이미지 파일만 업로드할 수 있습니다.");
+            }
+
+            // 확장자 추정
+            String ext = "jpg";
+            if (contentType.contains("png")) ext = "png";
+            else if (contentType.contains("jpeg")) ext = "jpg";
+            else if (contentType.contains("webp")) ext = "webp";
+
+            byte[] bytes = file.getBytes();
+            String key = "photo/" + user.getId() + "/" + nowTs() + "." + ext;
+
+            // S3 업로드 + presigned URL 획득
+            String photoUrl = s3.uploadBytes(key, bytes, contentType);
+
+            // MemoryProfile 저장/갱신
+            Optional<MemoryProfile> opt = memoryProfileRepository.findByUserId(user.getId());
+            MemoryProfile profile = opt.orElseGet(() -> {
+                MemoryProfile p = new MemoryProfile();
+                p.setUserId(user.getId());
+                return p;
+            });
+            profile.setPhotoUrl(photoUrl);
+            memoryProfileRepository.save(profile);
+
+            return new VideoDtos.UploadPhotoResponse(photoUrl);
+
+        } catch (Exception e) {
+            throw new RuntimeException("사진 업로드 실패: " + e.getMessage(), e);
         }
-        return PlanType.FREE;
     }
 
-    /** 남은 일수(양수면 제한 미충족) */
-    private int daysRemaining(Long userId, int needDays){
-        var lastOpt = videoLastGeneratedRepository.findByUserId(userId);
-        if (lastOpt.isEmpty()) return 0;
-        LocalDateTime last = lastOpt.get().getLastGeneratedAt();
-        long diff = Duration.between(last, LocalDateTime.now()).toDays();
-        long remain = needDays - diff;
-        return (int) Math.max(0, remain);
+    // === 헬퍼들 ===
+    private byte[] synthesizeToMp3(String text) {
+        // 기본 보이스 ID를 하나 정해줘야 함.
+        // 예를 들어, 환경 변수로 VOICE_ID를 받아오거나, 프로젝트에서 공통 보이스 ID를 관리하도록 해.
+        String defaultVoiceId = "EXAVITQu4vr4xnSDxMaL"; // ElevenLabs 기본 제공 보이스 중 하나 (예시)
+
+        return eleven.tts(defaultVoiceId, text);
     }
 
-    private String nowTs(){
+
+    private boolean isValidShortKorean(String s) {
+        return s != null && s.trim().length() > 0 && s.trim().length() <= 15;
+    }
+
+    private String nowTs() {
         return new SimpleDateFormat("yyyyMMddHHmmss").format(new Date());
     }
-    private String guessExt(String contentType, String original){
-        if (contentType != null && contentType.contains("png")) return "png";
-        if (contentType != null && contentType.contains("webp")) return "webp";
-        if (original != null && original.toLowerCase().endsWith(".png")) return "png";
-        if (original != null && original.toLowerCase().endsWith(".webp")) return "webp";
-        return "jpg";
-    }
-    private boolean isBlank(String s){ return s == null || s.isBlank(); }
 }

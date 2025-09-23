@@ -40,6 +40,7 @@ public class ChatDtos {
             Long profileId,
             String displayName,
             String personalityPrompt,
-            String photoUrl // 없으면 null 허용
+            String photoUrl, // 없으면 null 허용
+            String voiceCloneId
     ) {}
 }
