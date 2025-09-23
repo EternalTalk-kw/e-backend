@@ -113,7 +113,8 @@ public class ChatService {
                         mp.getId(),
                         mp.getDisplayName(),
                         mp.getPersonalityPrompt(),
-                        mp.getPhotoUrl() // 엔티티에 없다면 null 리턴
+                        mp.getPhotoUrl(),// 엔티티에 없다면 null 리턴
+                        mp.getVoiceCloneId()
                 ));
     }
 

@@ -42,8 +42,8 @@ public class VoiceService {
         MemoryProfile mp = memoryProfileRepository.findByUserId(user.getId())
                 .orElseThrow(() -> new IllegalArgumentException("메모리 프로필이 없습니다. 먼저 프로필을 생성해 주세요."));
 
-        if (isBlank(mp.getVoiceCloneId()) || isBlank(mp.getPhotoUrl())) {
-            throw new IllegalArgumentException("voice_id 또는 photo_url이 없습니다. 먼저 샘플/사진을 등록해 주세요.");
+        if (isBlank(mp.getVoiceCloneId())) {
+            throw new IllegalArgumentException("voice_id가 없습니다. 먼저 샘플을 등록해 주세요.");
         }
 
         if (!isValidKoreanUnderLimit(text, 15)) {
